@@ -72,12 +72,11 @@ You're producing **release notes for users**, not a commit dump. So:
 
 The file already exists in [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format with an `[Unreleased]` heading.
 
-- If there are bullets under `[Unreleased]` already, merge your new ones into the same sections (don't duplicate).
-- Rename the `[Unreleased]` heading to `## [X.Y.Z] - YYYY-MM-DD` using today's date in ISO format (`date -u +%Y-%m-%d`). Use the version **without** the leading `v` in the heading (Keep-a-Changelog convention) but **with** the `v` in the link reference at the bottom.
-- Insert a fresh empty `## [Unreleased]` heading above the new release section so the next release has a target.
+- If a `## [Unreleased]` heading exists, merge any bullets under it into the new release's sections (don't duplicate) and then **remove the `[Unreleased]` heading entirely** — this project's CHANGELOG.md does not keep an empty placeholder between releases.
+- Add a new `## [X.Y.Z] - YYYY-MM-DD` heading using today's date in ISO format (`date -u +%Y-%m-%d`). Use the version **without** the leading `v` in the heading (Keep-a-Changelog convention) but **with** the `v` in the link reference at the bottom.
 - Update the reference-link footer:
-  - Replace the old `[Unreleased]` link target with `[Unreleased]: https://github.com/batuhan0sanli/tai/compare/vX.Y.Z...HEAD`
   - Add a new `[X.Y.Z]: https://github.com/batuhan0sanli/tai/compare/vPREV...vX.Y.Z` line (if there is no previous tag, use `releases/tag/vX.Y.Z` as the target instead).
+  - Do **not** add an `[Unreleased]` link reference — there is no `[Unreleased]` heading to point at.
 
 Show the resulting CHANGELOG.md diff to the user and **ask them to confirm** before committing. The user is the final editor of release notes — never push without their sign-off.
 
