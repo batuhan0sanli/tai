@@ -6,7 +6,14 @@ import (
 	"strings"
 )
 
-var fencedCodeBlock = regexp.MustCompile("(?s)```[a-zA-Z]*\\n?(.*?)\\n?```")
+// fencedCodeBlock matches a triple-backtick fence with an optional language
+// tag, requiring a newline between the opening fence and the body. The
+// trailing newline before the closing fence is optional.
+//
+// Requiring the leading newline is what stops a same-line fence like
+// "```ls -la```" from being parsed as language="ls", body=" -la". Without it,
+// SanitizeCommand silently returned a truncated, dangerous command.
+var fencedCodeBlock = regexp.MustCompile("(?s)```[a-zA-Z]*\\n(.*?)\\n?```")
 
 // SanitizeCommand normalises a raw AI response into a single executable shell
 // command, or returns an error if the response can't be safely executed. It is
