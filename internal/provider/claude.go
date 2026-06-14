@@ -3,8 +3,6 @@ package provider
 import (
 	"bytes"
 	"os/exec"
-	"regexp"
-	"strings"
 )
 
 type ClaudeCLIProvider struct{}
@@ -24,19 +22,9 @@ func (c *ClaudeCLIProvider) GenerateCommand(prompt string) (string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
-	if err != nil {
+	if err := cmd.Run(); err != nil {
 		return "", err
 	}
 
-	output := strings.TrimSpace(stdout.String())
-
-	// Safety: strip markdown fences (```bash ... ```) if Claude insists on returning them.
-	re := regexp.MustCompile("(?s)```[a-zA-Z]*\\n?(.*?)\\n?```")
-	if match := re.FindStringSubmatch(output); len(match) > 1 {
-		output = strings.TrimSpace(match[1])
-	}
-	output = strings.ReplaceAll(output, "`", "")
-
-	return output, nil
+	return SanitizeCommand(stdout.String())
 }
