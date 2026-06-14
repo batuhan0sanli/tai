@@ -28,16 +28,17 @@ Runtime dependency: the default provider shells out to the `claude` CLI, so `cla
 
 ## Architecture
 
-Three layers, top-down:
+Four layers, top-down:
 
 1. **`main.go`** — single-line entry that delegates to `cmd.Execute()`.
-2. **`cmd/`** — Cobra command definition (`rootCmd`), flag wiring, the confirm/execute/copy flow, and the platform-specific clipboard helper. This is also where the user-facing UX lives; per the inline comment, Phase 2 is intended to replace the plain `fmt.Scanln` prompt with a Bubble Tea TUI (Lipgloss/Bubble Tea deps are already in `go.mod`).
-3. **`internal/provider/`** — pluggable AI backends behind the `AIProvider` interface (`GenerateCommand(prompt string) (string, error)`). The only current implementation, `ClaudeCLIProvider`, subprocesses `claude -p <systemInstruction+prompt>` and post-processes the output to strip markdown fences and stray backticks. New providers (e.g. direct Anthropic API, OpenAI, local model) should implement `AIProvider` and be selectable from `cmd/root.go`; the provider is currently hard-wired to `NewClaudeCLIProvider()`.
+2. **`cmd/`** — Cobra command definition (`rootCmd`), flag wiring, the execute/copy dispatch, and the platform-specific clipboard helper. The default (no-flag) path hands off to `internal/tui` for confirmation; `-y` and `-c` short-circuit before the TUI is started.
+3. **`internal/tui/`** — Bubble Tea / Bubbles / Lipgloss confirmation UI. `tui.Run(prompt, command, provider)` shows the suggested command, lets the user accept it (Enter on an empty input), revise it via a textinput (which triggers an async `provider.GenerateCommand` call with original prompt + previous command + revision spliced together, with a spinner during the call), or quit (Esc/Ctrl+C). It returns the final command and a `shouldExecute` flag; the actual `bash -c` execution still happens in `cmd/root.go` after the program exits.
+4. **`internal/provider/`** — pluggable AI backends behind the `AIProvider` interface (`GenerateCommand(prompt string) (string, error)`). The only current implementation, `ClaudeCLIProvider`, subprocesses `claude -p <systemInstruction+prompt>` and post-processes the output to strip markdown fences and stray backticks. New providers (e.g. direct Anthropic API, OpenAI, local model) should implement `AIProvider` and be selectable from `cmd/root.go`; the provider is currently hard-wired to `NewClaudeCLIProvider()` and the same instance is reused by the TUI for revisions.
 
 The system prompt that constrains the model to emit only a raw command lives in `internal/provider/claude.go`. If you change provider behavior, keep the "output must be ready to run as-is" contract — `cmd/root.go` feeds the returned string straight into `bash -c` and into clipboards.
 
 ## Conventions worth knowing
 
-- Module path is the bare name `tai` (see `go.mod`), so internal imports look like `tai/cmd` and `tai/internal/provider` rather than a domain-prefixed path.
+- Module path is the bare name `tai` (see `go.mod`), so internal imports look like `tai/cmd`, `tai/internal/tui`, and `tai/internal/provider` rather than a domain-prefixed path.
 - Go version pin is `1.26.4`.
-- All third-party deps are currently `// indirect` because nothing outside `cmd/` and `internal/provider/` imports them directly yet — that will change once the TUI lands.
+- Direct deps: `spf13/cobra` (CLI), `charmbracelet/bubbletea` + `charmbracelet/bubbles` (textinput, spinner) + `charmbracelet/lipgloss` (TUI). Run `go mod tidy` after touching imports.

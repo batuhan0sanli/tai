@@ -6,7 +6,9 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+
 	"tai/internal/provider"
+	"tai/internal/tui"
 
 	"github.com/spf13/cobra"
 )
@@ -33,11 +35,9 @@ var rootCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		// Print the command in green (simple ANSI for now, instead of Lipgloss).
-		fmt.Printf("\n👉 Suggested command:\n\033[1;32m%s\033[0m\n\n", suggestedCmd)
-
-		// If --copy / -c is set, copy the command and exit without executing.
+		// --copy / -c: dump to clipboard and bail before the TUI.
 		if copyToClipboard {
+			fmt.Printf("\n👉 Suggested command:\n\033[1;32m%s\033[0m\n\n", suggestedCmd)
 			if err := copyCommandToClipboard(suggestedCmd); err != nil {
 				fmt.Printf("❌ Failed to copy to clipboard: %v\n", err)
 				os.Exit(1)
@@ -46,23 +46,24 @@ var rootCmd = &cobra.Command{
 			return
 		}
 
-		// If --yes / -y flag is set, execute directly.
+		// --yes / -y: run immediately, skip the TUI entirely.
 		if skipPermission {
+			fmt.Printf("\n👉 Suggested command:\n\033[1;32m%s\033[0m\n\n", suggestedCmd)
 			executeCommand(suggestedCmd)
 			return
 		}
 
-		// Plain terminal confirmation for now (Phase 2 will replace this with a Bubble Tea TUI).
-		fmt.Print("Do you want to run this command? [y/N]: ")
-		var input string
-		fmt.Scanln(&input)
-		input = strings.ToLower(strings.TrimSpace(input))
-
-		if input == "y" || input == "yes" {
-			executeCommand(suggestedCmd)
-		} else {
-			fmt.Println("Cancelled.")
+		// Default path: hand off to the Bubble Tea TUI for review / revision.
+		finalCmd, shouldRun, err := tui.Run(userPrompt, suggestedCmd, ai)
+		if err != nil {
+			fmt.Printf("❌ TUI error: %v\n", err)
+			os.Exit(1)
 		}
+		if !shouldRun {
+			fmt.Println("Cancelled.")
+			return
+		}
+		executeCommand(finalCmd)
 	},
 }
 
