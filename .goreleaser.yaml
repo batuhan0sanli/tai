@@ -1,0 +1,96 @@
+version: 2
+project_name: tai
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    main: .
+    binary: tai
+    ldflags:
+      - -s -w
+      - -X tai/cmd.version={{ .Version }}
+      - -X tai/cmd.commit={{ .Commit }}
+      - -X tai/cmd.date={{ .CommitDate }}
+
+archives:
+  - format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+
+    files:
+      - README.md
+      - LICENSE
+      - CHANGELOG.md
+
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - 'Merge pull request'
+      - 'Merge branch'
+
+# --- HOMEBREW (MACOS & LINUX) ---
+brews:
+  - repository:
+      owner: batuhan0sanli
+      name: homebrew-tap
+      token: "{{ .Env.GH_PAT }}"
+
+    name: tai
+    homepage: "https://github.com/batuhan0sanli/tai"
+    description: "Terminal AI — turn natural-language requests into shell commands using Claude."
+    license: "MIT"
+
+    install: |
+      bin.install "tai"
+
+    test: |
+      system "#{bin}/tai --version"
+
+# --- WINDOWS (SCOOP) ---
+scoops:
+  - repository:
+      owner: batuhan0sanli
+      name: scoop-bucket
+      token: "{{ .Env.GH_PAT }}"
+
+    name: tai
+    homepage: "https://github.com/batuhan0sanli/tai"
+    description: "Terminal AI — turn natural-language requests into shell commands using Claude."
+    license: "MIT"
+
+# --- LINUX ---
+nfpms:
+  - file_name_template: '{{ .ProjectName }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}'
+    homepage: https://github.com/batuhan0sanli/tai
+    maintainer: Batuhan Sanli <batuhansanli@gmail.com>
+    description: "Terminal AI — turn natural-language requests into shell commands using Claude."
+    license: "MIT"
+    formats:
+      - deb
+      - rpm

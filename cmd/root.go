@@ -21,6 +21,21 @@ var (
 	noTUI           bool
 )
 
+// Build metadata. These are overridden at link time by goreleaser via
+// -ldflags "-X tai/cmd.version=... -X tai/cmd.commit=... -X tai/cmd.date=...".
+// The defaults below are what `go build` / `go run` produce locally.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
+// versionString is the body of `tai --version`. Kept as a function so the
+// formatting can be unit-tested without depending on cobra's template engine.
+func versionString() string {
+	return fmt.Sprintf("tai version %s\ncommit:  %s\nbuilt:   %s\n", version, commit, date)
+}
+
 // Injection points: overridden by tests so the root command can be exercised
 // without the live `claude` CLI or a real TTY.
 var (
@@ -172,6 +187,14 @@ func Execute() {
 }
 
 func init() {
+	// Setting Version triggers cobra's built-in --version / -v handling, which
+	// short-circuits before Args validation, so `tai --version` works without a
+	// positional prompt. We override the default template so commit/date show
+	// alongside the version string.
+	rootCmd.Version = version
+	rootCmd.SetVersionTemplate(versionString())
+	rootCmd.Flags().BoolP("version", "v", false, "Print version information and exit")
+
 	rootCmd.Flags().BoolVarP(&skipPermission, "yes", "y", false, "Skip the confirmation prompt and run the command directly")
 	rootCmd.Flags().BoolVarP(&copyToClipboard, "copy", "c", false, "Do not run the command, only copy it to the clipboard")
 	rootCmd.Flags().BoolVar(&noTUI, "no-tui", false, "Use the plain y/N prompt instead of the Bubble Tea TUI (for terminals without TUI support)")

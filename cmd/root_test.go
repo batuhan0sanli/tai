@@ -812,7 +812,7 @@ func TestRecordHistory_SilentOnSuccess(t *testing.T) {
 }
 
 func TestRootCmd_FlagsRegistered(t *testing.T) {
-	for _, name := range []string{"yes", "copy", "no-tui"} {
+	for _, name := range []string{"yes", "copy", "no-tui", "version"} {
 		f := rootCmd.Flags().Lookup(name)
 		if f == nil {
 			t.Errorf("flag %q is not registered", name)
@@ -824,5 +824,81 @@ func TestRootCmd_FlagsRegistered(t *testing.T) {
 	}
 	if f := rootCmd.Flags().ShorthandLookup("c"); f == nil || f.Name != "copy" {
 		t.Errorf("expected -c to map to --copy, got %v", f)
+	}
+	if f := rootCmd.Flags().ShorthandLookup("v"); f == nil || f.Name != "version" {
+		t.Errorf("expected -v to map to --version, got %v", f)
+	}
+}
+
+// withVersionVars snapshots and restores the build-info package vars so tests
+// can inject deterministic values without poisoning later assertions.
+func withVersionVars(t *testing.T, v, c, d string) {
+	t.Helper()
+	origV, origC, origD := version, commit, date
+	t.Cleanup(func() { version, commit, date = origV, origC, origD })
+	version, commit, date = v, c, d
+}
+
+func TestVersionString_IncludesAllFields(t *testing.T) {
+	withVersionVars(t, "1.2.3", "abc1234", "2026-06-14T12:00:00Z")
+
+	got := versionString()
+
+	wantContains := []string{"tai version 1.2.3", "commit:  abc1234", "built:   2026-06-14T12:00:00Z"}
+	for _, want := range wantContains {
+		if !strings.Contains(got, want) {
+			t.Errorf("versionString() = %q, missing %q", got, want)
+		}
+	}
+	if !strings.HasSuffix(got, "\n") {
+		t.Errorf("versionString() should end in a newline, got %q", got)
+	}
+}
+
+func TestVersionString_DefaultsWhenNotInjected(t *testing.T) {
+	// Reset to the link-time defaults and verify they surface (covers the
+	// dev/local-build path where goreleaser hasn't substituted the vars).
+	withVersionVars(t, "dev", "none", "unknown")
+
+	got := versionString()
+
+	for _, want := range []string{"tai version dev", "commit:  none", "built:   unknown"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("versionString() = %q, missing %q", got, want)
+		}
+	}
+}
+
+func TestRootCmd_VersionFlagPrintsVersion(t *testing.T) {
+	// Drive rootCmd end-to-end with --version, capturing the cobra-rendered
+	// output. This confirms the SetVersionTemplate wiring works and that
+	// --version short-circuits Args validation (no positional prompt required).
+	withVersionVars(t, "9.9.9", "deadbeef", "2026-01-01")
+	// Re-bind the template now that we've swapped the vars; init() captured
+	// the original values, so we have to refresh it for this test only.
+	origTmpl := rootCmd.VersionTemplate()
+	rootCmd.SetVersionTemplate(versionString())
+	t.Cleanup(func() { rootCmd.SetVersionTemplate(origTmpl) })
+
+	var buf bytes.Buffer
+	rootCmd.SetOut(&buf)
+	rootCmd.SetErr(&buf)
+	rootCmd.SetArgs([]string{"--version"})
+	t.Cleanup(func() {
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+		rootCmd.SetArgs(nil)
+	})
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("rootCmd.Execute() with --version errored: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "tai version 9.9.9") {
+		t.Errorf("--version output missing version line, got %q", out)
+	}
+	if !strings.Contains(out, "deadbeef") {
+		t.Errorf("--version output missing commit, got %q", out)
 	}
 }

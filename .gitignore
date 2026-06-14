@@ -30,3 +30,9 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Local-built binary (matches the project name, lives at repo root).
+/tai
+
+# GoReleaser output directory.
+dist/
