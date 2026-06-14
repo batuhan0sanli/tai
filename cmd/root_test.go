@@ -47,10 +47,13 @@ func withFlagsReset(t *testing.T) {
 // withInjections snapshots and restores the injection vars used by runRoot.
 func withInjections(t *testing.T) {
 	t.Helper()
-	origProv, origTUI, origStdin := newProvider, runTUI, stdin
+	origProv, origTUI, origSave, origStdin := newProvider, runTUI, saveHistory, stdin
 	t.Cleanup(func() {
-		newProvider, runTUI, stdin = origProv, origTUI, origStdin
+		newProvider, runTUI, saveHistory, stdin = origProv, origTUI, origSave, origStdin
 	})
+	// Default to a no-op recorder so tests don't accidentally write to the real
+	// history file under $HOME. Individual tests can override to inspect calls.
+	saveHistory = func(string, string) error { return nil }
 }
 
 func TestClipboardCommand(t *testing.T) {
@@ -589,6 +592,222 @@ func TestRunRoot_DefaultPath_TUIError(t *testing.T) {
 	}
 	if !strings.Contains(out, "TUI error") {
 		t.Errorf("output should mention TUI error, got: %q", out)
+	}
+}
+
+// historyRecorder is a helper that captures every saveHistory invocation so
+// tests can assert which branches persist an entry and which don't.
+type historyRecorder struct {
+	calls []struct{ prompt, command string }
+	err   error
+}
+
+func (r *historyRecorder) save(prompt, command string) error {
+	r.calls = append(r.calls, struct{ prompt, command string }{prompt, command})
+	return r.err
+}
+
+func TestRunRoot_YesFlagRecordsHistory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash -c not available on windows")
+	}
+	withFlagsReset(t)
+	withInjections(t)
+	skipPermission = true
+
+	rec := &historyRecorder{}
+	saveHistory = rec.save
+	newProvider = func() provider.AIProvider { return &fakeProvider{out: "echo ok"} }
+
+	_ = captureStdout(t, func() { runRoot([]string{"do", "thing"}) })
+
+	if len(rec.calls) != 1 {
+		t.Fatalf("saveHistory calls = %d, want 1", len(rec.calls))
+	}
+	if rec.calls[0].prompt != "do thing" {
+		t.Errorf("recorded prompt = %q, want %q", rec.calls[0].prompt, "do thing")
+	}
+	if rec.calls[0].command != "echo ok" {
+		t.Errorf("recorded command = %q, want %q", rec.calls[0].command, "echo ok")
+	}
+}
+
+func TestRunRoot_CopyPathRecordsHistory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("clipboard stub uses shell script")
+	}
+	withFlagsReset(t)
+	withInjections(t)
+	copyToClipboard = true
+
+	rec := &historyRecorder{}
+	saveHistory = rec.save
+	newProvider = func() provider.AIProvider { return &fakeProvider{out: "ls"} }
+
+	dir := t.TempDir()
+	switch runtime.GOOS {
+	case "darwin":
+		writeStubBinary(t, dir, "pbcopy", filepath.Join(dir, "clip.txt"))
+	case "linux":
+		writeStubBinary(t, dir, "xclip", filepath.Join(dir, "clip.txt"))
+	default:
+		t.Skipf("no clipboard stub for %s", runtime.GOOS)
+	}
+	prependPATH(t, dir)
+
+	_ = captureStdout(t, func() { runRoot([]string{"x"}) })
+
+	if len(rec.calls) != 1 {
+		t.Fatalf("saveHistory calls = %d, want 1", len(rec.calls))
+	}
+	if rec.calls[0].command != "ls" {
+		t.Errorf("recorded command = %q, want %q", rec.calls[0].command, "ls")
+	}
+}
+
+func TestRunRoot_NoTUIAcceptRecordsHistory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash -c not available on windows")
+	}
+	withFlagsReset(t)
+	withInjections(t)
+	noTUI = true
+	stdin = strings.NewReader("y\n")
+
+	rec := &historyRecorder{}
+	saveHistory = rec.save
+	newProvider = func() provider.AIProvider { return &fakeProvider{out: "echo accepted"} }
+
+	_ = captureStdout(t, func() { runRoot([]string{"x"}) })
+
+	if len(rec.calls) != 1 {
+		t.Errorf("saveHistory calls = %d, want 1", len(rec.calls))
+	}
+}
+
+func TestRunRoot_NoTUIRejectSkipsHistory(t *testing.T) {
+	withFlagsReset(t)
+	withInjections(t)
+	noTUI = true
+	stdin = strings.NewReader("n\n")
+
+	rec := &historyRecorder{}
+	saveHistory = rec.save
+	newProvider = func() provider.AIProvider { return &fakeProvider{out: "ls"} }
+
+	_ = captureStdout(t, func() { runRoot([]string{"x"}) })
+
+	if len(rec.calls) != 0 {
+		t.Errorf("rejected commands must not be saved, got %d calls", len(rec.calls))
+	}
+}
+
+func TestRunRoot_TUICancelSkipsHistory(t *testing.T) {
+	withFlagsReset(t)
+	withInjections(t)
+
+	rec := &historyRecorder{}
+	saveHistory = rec.save
+	newProvider = func() provider.AIProvider { return &fakeProvider{out: "ls"} }
+	runTUI = func(string, string, provider.AIProvider) (string, bool, error) {
+		return "ls", false, nil
+	}
+
+	_ = captureStdout(t, func() { runRoot([]string{"x"}) })
+
+	if len(rec.calls) != 0 {
+		t.Errorf("cancelled TUI must not save history, got %d calls", len(rec.calls))
+	}
+}
+
+func TestRunRoot_TUIAcceptRecordsRevisedCommand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash -c not available on windows")
+	}
+	withFlagsReset(t)
+	withInjections(t)
+
+	rec := &historyRecorder{}
+	saveHistory = rec.save
+	newProvider = func() provider.AIProvider { return &fakeProvider{out: "echo original"} }
+	runTUI = func(string, string, provider.AIProvider) (string, bool, error) {
+		return "echo revised", true, nil
+	}
+
+	_ = captureStdout(t, func() { runRoot([]string{"tui", "prompt"}) })
+
+	if len(rec.calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(rec.calls))
+	}
+	if rec.calls[0].command != "echo revised" {
+		t.Errorf("recorded command = %q, want %q (the revised one)", rec.calls[0].command, "echo revised")
+	}
+	if rec.calls[0].prompt != "tui prompt" {
+		t.Errorf("recorded prompt = %q, want %q", rec.calls[0].prompt, "tui prompt")
+	}
+}
+
+func TestRecordHistory_WarnsOnError(t *testing.T) {
+	withInjections(t)
+	saveHistory = func(string, string) error { return errors.New("disk full") }
+
+	// Capture stderr to verify the warning surfaces there (and not stdout).
+	origErr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	done := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		done <- buf.String()
+	}()
+
+	recordHistory("p", "c")
+
+	w.Close()
+	os.Stderr = origErr
+	got := <-done
+
+	if !strings.Contains(got, "history not saved") {
+		t.Errorf("stderr should warn about save failure, got %q", got)
+	}
+	if !strings.Contains(got, "disk full") {
+		t.Errorf("stderr should surface the underlying error, got %q", got)
+	}
+}
+
+func TestRecordHistory_SilentOnSuccess(t *testing.T) {
+	withInjections(t)
+	called := false
+	saveHistory = func(p, c string) error { called = true; return nil }
+
+	origErr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	done := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		done <- buf.String()
+	}()
+
+	recordHistory("p", "c")
+
+	w.Close()
+	os.Stderr = origErr
+	got := <-done
+
+	if !called {
+		t.Error("saveHistory should be called")
+	}
+	if got != "" {
+		t.Errorf("stderr should be empty on success, got %q", got)
 	}
 }
 

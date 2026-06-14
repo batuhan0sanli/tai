@@ -8,11 +8,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```
 tai "[request]" [-y|--yes] [-c|--copy] [--no-tui]
+tai history [-y|--yes]
 ```
 
 - `-y` / `--yes`: skip the confirmation and run immediately.
 - `-c` / `--copy`: do not run; pipe the command into the OS clipboard tool (`pbcopy` on darwin, `xclip` on linux, `clip` on windows) and exit.
 - `--no-tui`: skip the Bubble Tea TUI and use the plain `fmt.Scanln` y/N prompt instead. Intended for terminals where the TUI doesn't render correctly (limited TTYs, CI logs, some embedded shells). `-y` and `-c` still take precedence over this flag.
+- `history` (alias `h`): open a fuzzy-searchable `bubbles/list` of past prompts → commands stored in `~/.config/tai/history.json`. Pressing Enter on an entry copies the command to the clipboard by default, or runs it directly under `-y`. Every successful run / copy on the root command appends an entry; cancelled and rejected commands are not saved.
 
 ## Commands
 
@@ -29,12 +31,13 @@ Runtime dependency: the default provider shells out to the `claude` CLI, so `cla
 
 ## Architecture
 
-Four layers, top-down:
+Five layers, top-down:
 
 1. **`main.go`** — single-line entry that delegates to `cmd.Execute()`.
-2. **`cmd/`** — Cobra command definition (`rootCmd`), flag wiring, the execute/copy dispatch, and the platform-specific clipboard helper. The default (no-flag) path hands off to `internal/tui` for confirmation; `-y` and `-c` short-circuit before the TUI is started.
-3. **`internal/tui/`** — Bubble Tea / Bubbles / Lipgloss confirmation UI. `tui.Run(prompt, command, provider)` shows the suggested command, lets the user accept it (Enter on an empty input), revise it via a textinput (which triggers an async `provider.GenerateCommand` call with original prompt + previous command + revision spliced together, with a spinner during the call), or quit (Esc/Ctrl+C). It returns the final command and a `shouldExecute` flag; the actual `bash -c` execution still happens in `cmd/root.go` after the program exits.
+2. **`cmd/`** — Cobra command definitions (`rootCmd`, `historyCmd`), flag wiring, the execute/copy dispatch, and the platform-specific clipboard helper. The default (no-flag) root path hands off to `internal/tui` for confirmation; `-y` and `-c` short-circuit before the TUI is started. After every executed/copied command, `recordHistory` calls `history.SaveEntry` (best-effort: failures warn on stderr but don't fail the run).
+3. **`internal/tui/`** — Bubble Tea / Bubbles / Lipgloss UI layer. `tui.Run(prompt, command, provider)` is the confirmation TUI (textinput + spinner) used by the root command. `tui.RunHistory(entries)` is the history browser built on `bubbles/list` with fuzzy filtering enabled; selecting a row returns the chosen `history.HistoryEntry` and the `cmd` layer decides whether to copy or execute. Each `Run*` is a thin launcher around `tea.NewProgram(...).Run()`; the testable logic lives on the underlying `Model.Update` / `View` methods.
 4. **`internal/provider/`** — pluggable AI backends behind the `AIProvider` interface (`GenerateCommand(prompt string) (string, error)`). The only current implementation, `ClaudeCLIProvider`, subprocesses `claude -p <systemInstruction+prompt>` and hands the raw output to `SanitizeCommand`. New providers (e.g. direct Anthropic API, OpenAI, local model) should implement `AIProvider` and be selectable from `cmd/root.go`; the provider is currently hard-wired to `NewClaudeCLIProvider()` and the same instance is reused by the TUI for revisions.
+5. **`internal/history/`** — persistence layer for prompt → command pairs. `SaveEntry` prepends to a JSON array in `~/.config/tai/history.json` (capped at `MaxEntries = 500`, newest first) using a write-temp + rename so the file is never left half-written. `GetEntries` reads the same file; missing or empty files return an empty slice (not an error). The config directory is resolved via the package-level `configDirFn` injection point so tests can redirect to `t.TempDir()` without touching the real `$HOME`.
 
 The system prompt that constrains the model to emit only a raw command lives in `internal/provider/claude.go`. If you change provider behavior, keep the "output must be ready to run as-is" contract — `cmd/root.go` feeds the returned string straight into `bash -c` and into clipboards.
 
@@ -49,8 +52,9 @@ If tests fail, fix the root cause; don't delete or skip the failing test to make
 Coverage targets (current baseline, do not regress):
 
 - `internal/provider`: **100%** — pure logic, no excuses.
-- `internal/tui`: **≥ 89%** — the only carve-out is `tui.Run`, the thin Bubble Tea program launcher that needs a real TTY.
-- `cmd`: **≥ 90%** — the carve-out is `Execute()`, a 4-line cobra wrapper.
+- `internal/history`: **≥ 88%** — only carve-outs are unreachable error branches (`UserHomeDir` failure, `tmpfile.Write` / `tmpfile.Close` failures that require a kernel-level I/O fault to surface).
+- `internal/tui`: **≥ 87%** — the carve-outs are `tui.Run` and `tui.RunHistory`, the thin Bubble Tea program launchers that need a real TTY. Every `Update` / `View` / model-construction branch must stay covered.
+- `cmd`: **≥ 90%** — carve-outs are `Execute()` (a 4-line cobra wrapper) and the `Run` field of `rootCmd` / `historyCmd` (1-line dispatch to `runRoot` / `runHistory`).
 
 ### How the test suite is structured
 
@@ -58,7 +62,10 @@ Coverage targets (current baseline, do not regress):
 - **`internal/provider/claude_test.go`** — the Claude CLI provider is exercised end-to-end via a shell-script stub binary written into `t.TempDir()` and prepended to `$PATH` (`prependToPATH` / `withPATH` helpers). Tests cover the missing-binary, non-zero-exit, empty-stdout, sanitize-rejected, and happy paths.
 - **`internal/tui/mock_provider_test.go`** — `mockProvider` is the in-package fake used by every TUI test. Configure `defaultResp` / `defaultErr` or queue per-call responses via `responses`. It is concurrency-safe and tracks call count.
 - **`internal/tui/tui_test.go`** — `Model.Update` is tested directly by feeding it `tea.KeyMsg`, `tea.WindowSizeMsg`, `aiResponseMsg`, and `spinner.TickMsg` values, then inspecting the returned state. `View()` is asserted on substrings. `reviseCmd` is invoked directly to verify the combined-prompt format.
-- **`cmd/root_test.go`** — `runRoot` is the testable extraction of the cobra `Run` callback; it returns an exit code instead of calling `os.Exit`. Tests cover every branch (`-y`, `-c`, `--no-tui` accept + reject, default TUI accept + cancel + error, provider error, clipboard failure). Injection points for tests: `newProvider`, `runTUI`, and `stdin` package-level vars — always reset with `withInjections(t)` and `withFlagsReset(t)`.
+- **`internal/tui/history_test.go`** — same recipe as `tui_test.go` for the `HistoryModel`: drive `Update` with key messages, assert the filter-state guard against Enter, and verify `Selected()` returns the row under the cursor (not always row 0). `list.Filtering` state is entered programmatically via `m.list.SetFilterState(list.Filtering)` so the test doesn't depend on the `/` keybinding.
+- **`internal/history/history_test.go`** — every code path is driven through the `configDirFn` injection point pointing at `t.TempDir()`: round-trip save/get, prepend ordering, the `MaxEntries` cap, missing/empty/corrupt file behaviour, atomic-write failure modes (read-only dir, blocker file at the dir path, directory-as-file at `history.json`).
+- **`cmd/root_test.go`** — `runRoot` is the testable extraction of the cobra `Run` callback; it returns an exit code instead of calling `os.Exit`. Tests cover every branch (`-y`, `-c`, `--no-tui` accept + reject, default TUI accept + cancel + error, provider error, clipboard failure) and assert that `saveHistory` fires only on accepted paths. Injection points for tests: `newProvider`, `runTUI`, `saveHistory`, and `stdin` package-level vars — always reset with `withInjections(t)` (which also installs a no-op `saveHistory` to keep tests from writing to `$HOME`) and `withFlagsReset(t)`.
+- **`cmd/history_test.go`** — drives `runHistory` through the `getHistoryEntries` and `runHistoryTUI` injection points to cover load errors, the empty-history short-circuit, TUI errors, cancellation, the default copy-to-clipboard path (via the same shell-script stub as the root tests), copy failure, and `-y` execution. Use `withHistoryInjections(t)` + `withHistoryFlagsReset(t)`.
 
 ### Writing new tests
 

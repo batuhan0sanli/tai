@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 
+	"tai/internal/history"
 	"tai/internal/provider"
 	"tai/internal/tui"
 
@@ -25,6 +26,7 @@ var (
 var (
 	newProvider           = func() provider.AIProvider { return provider.NewClaudeCLIProvider() }
 	runTUI                = tui.Run
+	saveHistory           = history.SaveEntry
 	stdin       io.Reader = os.Stdin
 )
 
@@ -61,6 +63,7 @@ func runRoot(args []string) int {
 			return 1
 		}
 		fmt.Println("📋 Command copied to clipboard.")
+		recordHistory(userPrompt, suggestedCmd)
 		return 0
 	}
 
@@ -68,6 +71,7 @@ func runRoot(args []string) int {
 	if skipPermission {
 		fmt.Printf("\n👉 Suggested command:\n\033[1;32m%s\033[0m\n\n", suggestedCmd)
 		executeCommand(suggestedCmd)
+		recordHistory(userPrompt, suggestedCmd)
 		return 0
 	}
 
@@ -78,6 +82,7 @@ func runRoot(args []string) int {
 		input := readYesNo(stdin)
 		if input == "y" || input == "yes" {
 			executeCommand(suggestedCmd)
+			recordHistory(userPrompt, suggestedCmd)
 		} else {
 			fmt.Println("Cancelled.")
 		}
@@ -95,7 +100,17 @@ func runRoot(args []string) int {
 		return 0
 	}
 	executeCommand(finalCmd)
+	recordHistory(userPrompt, finalCmd)
 	return 0
+}
+
+// recordHistory is a best-effort wrapper around saveHistory: a failure to
+// persist a single entry shouldn't disrupt the foreground action the user
+// just took, but we surface it on stderr so it isn't silently lost.
+func recordHistory(prompt, command string) {
+	if err := saveHistory(prompt, command); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  history not saved: %v\n", err)
+	}
 }
 
 // readYesNo reads a single line from r and returns the lower-cased, trimmed
