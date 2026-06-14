@@ -16,6 +16,7 @@ import (
 var (
 	skipPermission  bool
 	copyToClipboard bool
+	noTUI           bool
 )
 
 var rootCmd = &cobra.Command{
@@ -50,6 +51,20 @@ var rootCmd = &cobra.Command{
 		if skipPermission {
 			fmt.Printf("\n👉 Suggested command:\n\033[1;32m%s\033[0m\n\n", suggestedCmd)
 			executeCommand(suggestedCmd)
+			return
+		}
+
+		// --no-tui: fall back to the plain y/N prompt for terminals without TUI support.
+		if noTUI {
+			fmt.Printf("\n👉 Suggested command:\n\033[1;32m%s\033[0m\n\n", suggestedCmd)
+			fmt.Print("Do you want to run this command? [y/N]: ")
+			var input string
+			fmt.Scanln(&input)
+			if ans := strings.ToLower(strings.TrimSpace(input)); ans == "y" || ans == "yes" {
+				executeCommand(suggestedCmd)
+			} else {
+				fmt.Println("Cancelled.")
+			}
 			return
 		}
 
@@ -104,4 +119,5 @@ func Execute() {
 func init() {
 	rootCmd.Flags().BoolVarP(&skipPermission, "yes", "y", false, "Skip the confirmation prompt and run the command directly")
 	rootCmd.Flags().BoolVarP(&copyToClipboard, "copy", "c", false, "Do not run the command, only copy it to the clipboard")
+	rootCmd.Flags().BoolVar(&noTUI, "no-tui", false, "Use the plain y/N prompt instead of the Bubble Tea TUI (for terminals without TUI support)")
 }

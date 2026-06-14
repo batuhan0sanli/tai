@@ -7,11 +7,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `tai` ("Terminal AI") is a Go CLI that turns a natural-language request into a shell command, shows it to the user, and optionally executes or copies it. Invocation shape:
 
 ```
-tai "[request]" [-y|--yes] [-c|--copy]
+tai "[request]" [-y|--yes] [-c|--copy] [--no-tui]
 ```
 
-- `-y` / `--yes`: skip the y/N confirmation and run immediately.
+- `-y` / `--yes`: skip the confirmation and run immediately.
 - `-c` / `--copy`: do not run; pipe the command into the OS clipboard tool (`pbcopy` on darwin, `xclip` on linux, `clip` on windows) and exit.
+- `--no-tui`: skip the Bubble Tea TUI and use the plain `fmt.Scanln` y/N prompt instead. Intended for terminals where the TUI doesn't render correctly (limited TTYs, CI logs, some embedded shells). `-y` and `-c` still take precedence over this flag.
 
 ## Commands
 
