@@ -1,0 +1,2 @@
+# tai
+Terminal AI
