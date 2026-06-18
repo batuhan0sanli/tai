@@ -108,7 +108,7 @@ Out of the box `tai` shells out to the [`claude` CLI](https://docs.claude.com/en
 ```
 tai "[request]" [-y|--yes] [-c|--copy] [--no-tui] [--provider NAME] [-m|--model NAME]
 tai history     [-y|--yes]
-tai config edit
+tai config              # open the interactive editor (alias: tai config edit)
 tai config init [--force]
 tai config path
 tai --version
@@ -189,13 +189,15 @@ tai --version
 
 `tai` reads `~/.config/tai/config.json` to decide which AI backend to use. With no config present it falls back to the `claude` CLI, so it works out of the box.
 
-The easiest way to set things up is the interactive editor:
+The easiest way to set things up is the interactive editor — just run `tai config`:
 
 ```bash
-tai config edit     # TUI: pick the default provider (★) and edit each one's model/key/URL
+tai config          # TUI: pick the default provider (★), then each one's model/key/URL
 ```
 
 In the editor: `↑/↓` move, `enter` opens a provider to edit its fields, `d` marks the highlighted provider as the default, `s` saves & quits, `q`/`esc` quits without saving. When no config exists yet it starts from the full template so every provider is there to fill in.
+
+**Model selection.** Inside a provider, focus the **Model** field and press `enter` — for API providers (OpenAI, Gemini, Anthropic, and OpenAI-compatible servers like Ollama) `tai` fetches the live list of available models from the provider and lets you pick one (using the key/URL you just entered). `esc` falls back to typing a model name by hand. This keeps you on current model IDs without hard-coding a stale list.
 
 Prefer editing JSON by hand? Scaffold and locate the file with:
 

@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- `tai config edit` — an interactive TUI to choose the default provider and edit each provider's model, API key, base URL, and command without hand-editing JSON.
+- `tai config` — an interactive TUI (also `tai config edit`) to choose the default provider and edit each provider's model, API key, base URL, and command without hand-editing JSON. Running `tai config` with no subcommand opens the editor directly.
+- In the editor, the Model field fetches the provider's live model list (OpenAI, Gemini, Anthropic, and OpenAI-compatible servers like Ollama) so you can pick a current model instead of typing it; falls back to free-text entry.
 
 ## [0.2.0] - 2026-06-18
 

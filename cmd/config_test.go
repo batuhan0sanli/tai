@@ -325,6 +325,9 @@ func TestConfigCmd_Registered(t *testing.T) {
 	for _, c := range rootCmd.Commands() {
 		if c.Name() == "config" {
 			found = true
+			if c.Run == nil {
+				t.Error("bare `tai config` should open the editor (Run not wired)")
+			}
 			sub := map[string]bool{}
 			for _, s := range c.Commands() {
 				sub[s.Name()] = true

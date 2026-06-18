@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -291,6 +294,227 @@ func TestConfig_DetailView(t *testing.T) {
 	for _, want := range []string{"edit provider: openai", "Model:", "Base URL:", "API Key:", "back to list"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("detail view missing %q\n%s", want, v)
+		}
+	}
+}
+
+// openDetailOnOpenAI navigates to the openai provider and opens its detail
+// screen (focus 0 = Model), with fetch overridden.
+func openDetailOnOpenAI(t *testing.T, fetch func(config.ProviderConfig) ([]string, error)) ConfigModel {
+	t.Helper()
+	m := NewConfig(sampleConfig())
+	m.fetch = fetch
+	m = cfgStep(t, m, kDown)  // openai
+	m = cfgStep(t, m, kEnter) // detail; field 0 = Model
+	return m
+}
+
+func TestConfig_ModelPicker_FetchAndSelect(t *testing.T) {
+	m := openDetailOnOpenAI(t, func(config.ProviderConfig) ([]string, error) {
+		return []string{"gpt-4o", "gpt-4o-mini"}, nil
+	})
+	m, cmd := cfgStepCmd(t, m, kEnter) // open picker on Model field
+	if m.mode != modeModels || !m.loading {
+		t.Fatalf("expected modeModels+loading, got mode=%v loading=%v", m.mode, m.loading)
+	}
+	if cmd == nil {
+		t.Fatal("expected a fetch command")
+	}
+	// Run the fetch command and feed its message back in.
+	m = cfgStep(t, m, cmd())
+	if m.loading {
+		t.Fatal("loading should clear after modelsMsg")
+	}
+	if len(m.models) != 2 {
+		t.Fatalf("models = %v, want 2", m.models)
+	}
+	// The loaded-list view (via the top-level View dispatch) renders both rows.
+	if v := m.View(); !strings.Contains(v, "gpt-4o") || !strings.Contains(v, "enter: select") {
+		t.Errorf("models list view missing rows/help:\n%s", v)
+	}
+	m = cfgStep(t, m, kDown) // select gpt-4o-mini
+	if m.modelCursor != 1 {
+		t.Fatalf("modelCursor = %d, want 1", m.modelCursor)
+	}
+	m = cfgStep(t, m, kEnter) // pick it
+	if m.mode != modeDetail {
+		t.Fatalf("mode = %v, want modeDetail after selecting", m.mode)
+	}
+	if m.inputs[0].Value() != "gpt-4o-mini" {
+		t.Errorf("Model input = %q, want gpt-4o-mini", m.inputs[0].Value())
+	}
+}
+
+func TestConfig_ModelPicker_EscCancels(t *testing.T) {
+	m := openDetailOnOpenAI(t, func(config.ProviderConfig) ([]string, error) {
+		return []string{"gpt-4o"}, nil
+	})
+	m, cmd := cfgStepCmd(t, m, kEnter)
+	m = cfgStep(t, m, cmd())
+	m = cfgStep(t, m, kEsc) // cancel without selecting
+	if m.mode != modeDetail {
+		t.Fatalf("mode = %v, want modeDetail after esc", m.mode)
+	}
+	if m.inputs[0].Value() != "gpt-4o" && m.inputs[0].Value() != "gpt-4o" {
+		// model field keeps its original value (gpt-4o from sampleConfig)
+		t.Errorf("Model input should be unchanged, got %q", m.inputs[0].Value())
+	}
+}
+
+func TestConfig_ModelPicker_FetchError(t *testing.T) {
+	m := openDetailOnOpenAI(t, func(config.ProviderConfig) ([]string, error) {
+		return nil, errors.New("401 unauthorized")
+	})
+	m, cmd := cfgStepCmd(t, m, kEnter)
+	m = cfgStep(t, m, cmd())
+	if m.modelsErr == nil {
+		t.Fatal("expected modelsErr to be set")
+	}
+	if !strings.Contains(m.modelsView(), "401 unauthorized") {
+		t.Errorf("models view should show the error:\n%s", m.modelsView())
+	}
+	m = cfgStep(t, m, kEsc)
+	if m.mode != modeDetail {
+		t.Errorf("esc should return to detail, got %v", m.mode)
+	}
+}
+
+func TestConfig_ModelPicker_EmptyResult(t *testing.T) {
+	m := openDetailOnOpenAI(t, func(config.ProviderConfig) ([]string, error) {
+		return nil, nil
+	})
+	m, cmd := cfgStepCmd(t, m, kEnter)
+	m = cfgStep(t, m, cmd())
+	if !strings.Contains(m.modelsView(), "no models returned") {
+		t.Errorf("expected empty-models hint:\n%s", m.modelsView())
+	}
+	m = cfgStep(t, m, kEnter) // enter with no models -> back to detail, no change
+	if m.mode != modeDetail {
+		t.Errorf("mode = %v, want modeDetail", m.mode)
+	}
+}
+
+func TestConfig_ModelPicker_LoadingIgnoresNavAndCtrlCQuits(t *testing.T) {
+	m := openDetailOnOpenAI(t, func(config.ProviderConfig) ([]string, error) { return []string{"a"}, nil })
+	m, _ = cfgStepCmd(t, m, kEnter) // now loading
+	before := m.modelCursor
+	m = cfgStep(t, m, kDown) // ignored while loading
+	if m.modelCursor != before {
+		t.Error("navigation should be ignored while loading")
+	}
+	if !strings.Contains(m.modelsView(), "fetching available models") {
+		t.Errorf("loading view missing spinner text:\n%s", m.modelsView())
+	}
+	m, cmd := cfgStepCmd(t, m, kCtrlC)
+	if !m.quit || cmd == nil {
+		t.Errorf("ctrl+c should quit from the picker")
+	}
+}
+
+func TestConfig_ModelPicker_NavBounds(t *testing.T) {
+	m := openDetailOnOpenAI(t, func(config.ProviderConfig) ([]string, error) {
+		return []string{"a", "b"}, nil
+	})
+	m, cmd := cfgStepCmd(t, m, kEnter)
+	m = cfgStep(t, m, cmd())
+	m = cfgStep(t, m, kUp) // already at 0
+	if m.modelCursor != 0 {
+		t.Fatalf("cursor = %d, want 0", m.modelCursor)
+	}
+	m = cfgStep(t, m, kRunes("j")) // down via vim
+	m = cfgStep(t, m, kRunes("j")) // clamp at last
+	if m.modelCursor != 1 {
+		t.Fatalf("cursor = %d, want 1 (clamped)", m.modelCursor)
+	}
+	m = cfgStep(t, m, kRunes("k")) // up via vim
+	if m.modelCursor != 0 {
+		t.Fatalf("cursor = %d, want 0", m.modelCursor)
+	}
+}
+
+func TestConfig_EnterOnNonModelFieldDoesNotOpenPicker(t *testing.T) {
+	m := openDetailOnOpenAI(t, func(config.ProviderConfig) ([]string, error) {
+		t.Fatal("fetch must not be called from a non-Model field")
+		return nil, nil
+	})
+	m = cfgStep(t, m, kDown)  // move off Model to Base URL
+	m = cfgStep(t, m, kEnter) // should advance, not open picker
+	if m.mode != modeDetail {
+		t.Errorf("mode = %v, want modeDetail", m.mode)
+	}
+}
+
+func TestConfig_CLIModelFieldDoesNotOpenPicker(t *testing.T) {
+	// claude-code is a cli provider; its Model field (last) should commit on
+	// enter rather than open the picker.
+	m := NewConfig(sampleConfig())
+	m.fetch = func(config.ProviderConfig) ([]string, error) {
+		t.Fatal("cli provider must not fetch models")
+		return nil, nil
+	}
+	m = cfgStep(t, m, kEnter) // claude-code detail
+	m = cfgStep(t, m, kEnter) // -> Args
+	m = cfgStep(t, m, kEnter) // -> Model (last)
+	m = cfgStep(t, m, kEnter) // commit
+	if m.mode != modeList {
+		t.Errorf("mode = %v, want modeList (cli Model enter commits)", m.mode)
+	}
+}
+
+func TestDefaultFetchModels(t *testing.T) {
+	t.Run("provider-new-error", func(t *testing.T) {
+		if _, err := defaultFetchModels(config.ProviderConfig{}); err == nil {
+			t.Fatal("expected error for empty provider type")
+		}
+	})
+	t.Run("not-a-lister", func(t *testing.T) {
+		_, err := defaultFetchModels(config.ProviderConfig{Type: config.TypeCLI, Command: "claude"})
+		if err == nil || !strings.Contains(err.Error(), "can't list models") {
+			t.Fatalf("expected can't-list error, got %v", err)
+		}
+	})
+	t.Run("success", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"data":[{"id":"gpt-4o"}]}`))
+		}))
+		defer srv.Close()
+		got, err := defaultFetchModels(config.ProviderConfig{Type: config.TypeOpenAI, BaseURL: srv.URL})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 1 || got[0] != "gpt-4o" {
+			t.Errorf("models = %v, want [gpt-4o]", got)
+		}
+	})
+}
+
+func TestConfig_DetailViewShowsModelListHint(t *testing.T) {
+	m := openDetailOnOpenAI(t, defaultFetchModels)
+	if !strings.Contains(m.View(), "(enter to list)") {
+		t.Errorf("API-provider detail should hint at the model list:\n%s", m.View())
+	}
+}
+
+func TestConfig_AccessorsAndIsAPIType(t *testing.T) {
+	m := NewConfig(sampleConfig())
+	if m.Config().DefaultProvider != "claude-code" {
+		t.Errorf("Config() default = %q, want claude-code", m.Config().DefaultProvider)
+	}
+	if m.Saved() {
+		t.Error("Saved() should be false on a fresh model")
+	}
+	for _, tc := range []struct {
+		typ  string
+		want bool
+	}{
+		{config.TypeOpenAI, true},
+		{config.TypeGemini, true},
+		{config.TypeAnthropic, true},
+		{config.TypeCLI, false},
+		{"mystery", false},
+	} {
+		if got := isAPIType(tc.typ); got != tc.want {
+			t.Errorf("isAPIType(%q) = %v, want %v", tc.typ, got, tc.want)
 		}
 	}
 }

@@ -24,7 +24,14 @@ var (
 
 var configCmd = &cobra.Command{
 	Use:   "config",
-	Short: "Manage tai's provider configuration",
+	Short: "Manage tai's provider configuration (opens the editor TUI with no subcommand)",
+	// Bare `tai config` opens the interactive editor; `init`/`path` are still
+	// available as explicit subcommands.
+	Run: func(cmd *cobra.Command, args []string) {
+		if code := runConfigEdit(); code != 0 {
+			os.Exit(code)
+		}
+	},
 }
 
 var configInitCmd = &cobra.Command{

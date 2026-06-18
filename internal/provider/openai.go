@@ -2,10 +2,12 @@ package provider
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -89,4 +91,45 @@ func (p *OpenAIProvider) GenerateCommand(prompt string) (string, error) {
 	}
 
 	return SanitizeCommand(parsed.Choices[0].Message.Content)
+}
+
+// ListModels returns the model IDs exposed by the endpoint's /models route
+// (works for the OpenAI API and OpenAI-compatible servers like Ollama).
+func (p *OpenAIProvider) ListModels(ctx context.Context) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	if p.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	}
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("openai: %s: %s", resp.Status, strings.TrimSpace(string(msg)))
+	}
+
+	var parsed struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, err
+	}
+
+	models := make([]string, 0, len(parsed.Data))
+	for _, d := range parsed.Data {
+		if d.ID != "" {
+			models = append(models, d.ID)
+		}
+	}
+	sort.Strings(models)
+	return models, nil
 }

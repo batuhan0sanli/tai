@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"time"
 
@@ -62,4 +63,18 @@ func (p *AnthropicProvider) GenerateCommand(prompt string) (string, error) {
 	}
 
 	return SanitizeCommand(b.String())
+}
+
+// ListModels returns the Anthropic model IDs available to the account.
+func (p *AnthropicProvider) ListModels(ctx context.Context) ([]string, error) {
+	page, err := p.client.Models.List(ctx, anthropic.ModelListParams{})
+	if err != nil {
+		return nil, err
+	}
+	models := make([]string, 0, len(page.Data))
+	for _, m := range page.Data {
+		models = append(models, m.ID)
+	}
+	sort.Strings(models)
+	return models, nil
 }
