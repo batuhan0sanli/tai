@@ -155,8 +155,12 @@ func TestCLIProvider_NonZeroExitIsReportedAsError(t *testing.T) {
 	writeStub(t, dir, "claude", "", "boom", 1)
 	prependToPATH(t, dir)
 
-	if out, err := NewClaudeCLIProvider().GenerateCommand("anything"); err == nil {
+	out, err := NewClaudeCLIProvider().GenerateCommand("anything")
+	if err == nil {
 		t.Fatalf("expected error on non-zero exit, got %q", out)
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Errorf("error should surface the CLI's stderr, got %v", err)
 	}
 }
 

@@ -122,6 +122,31 @@ func TestRunConfigInit_ForceOverwrites(t *testing.T) {
 	}
 }
 
+func TestRunConfigInit_StatError(t *testing.T) {
+	withConfigInjections(t)
+	// Put a regular file where a parent directory is expected, so os.Stat on the
+	// child path fails with ENOTDIR (not "does not exist").
+	dir := t.TempDir()
+	notADir := filepath.Join(dir, "file")
+	if err := os.WriteFile(notADir, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	configFilePath = func() (string, error) { return filepath.Join(notADir, "config.json"), nil }
+	configSave = func(config.Config) error {
+		t.Fatal("configSave must not be called when stat returns a non-NotExist error")
+		return nil
+	}
+
+	var code int
+	out := captureStdout(t, func() { code = runConfigInit() })
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "cannot check config path") {
+		t.Errorf("output should surface the stat error, got %q", out)
+	}
+}
+
 func TestRunConfigInit_FilePathError(t *testing.T) {
 	withConfigInjections(t)
 	configFilePath = func() (string, error) { return "", errors.New("no home") }

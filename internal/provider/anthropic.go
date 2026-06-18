@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"strings"
+	"time"
 
 	"tai/internal/config"
 
@@ -36,7 +37,12 @@ func NewAnthropicProvider(pc config.ProviderConfig) *AnthropicProvider {
 }
 
 func (p *AnthropicProvider) GenerateCommand(prompt string) (string, error) {
-	resp, err := p.client.Messages.New(context.Background(), anthropic.MessageNewParams{
+	// Bound the request like the HTTP providers' 60s client timeout, so a hung
+	// API call can't block tai indefinitely.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	resp, err := p.client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     p.model,
 		MaxTokens: 1024,
 		System:    []anthropic.TextBlockParam{{Text: systemPrompt}},

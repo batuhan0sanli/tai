@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 
 	"tai/internal/config"
@@ -50,8 +52,16 @@ func runConfigInit() int {
 		fmt.Printf("❌ %v\n", err)
 		return 1
 	}
-	if _, err := os.Stat(path); err == nil && !configForce {
-		fmt.Printf("⚠️  config already exists at %s (use --force to overwrite)\n", path)
+	switch _, statErr := os.Stat(path); {
+	case statErr == nil:
+		if !configForce {
+			fmt.Printf("⚠️  config already exists at %s (use --force to overwrite)\n", path)
+			return 1
+		}
+	case !errors.Is(statErr, fs.ErrNotExist):
+		// A permission error / broken symlink / ENOTDIR shouldn't be silently
+		// treated as "doesn't exist" and then overwritten.
+		fmt.Printf("❌ cannot check config path %s: %v\n", path, statErr)
 		return 1
 	}
 	if err := configSave(config.Template()); err != nil {

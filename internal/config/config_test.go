@@ -83,6 +83,20 @@ func TestLoadEmptyFileReturnsDefault(t *testing.T) {
 	}
 }
 
+func TestLoadWhitespaceFileReturnsDefault(t *testing.T) {
+	dir := withConfigDir(t)
+	if err := os.WriteFile(filepath.Join(dir, fileName), []byte("\n\t  \n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DefaultProvider != "claude-code" {
+		t.Errorf("whitespace-only file should yield default, got %q", cfg.DefaultProvider)
+	}
+}
+
 func TestLoadEmptyProvidersReturnsDefault(t *testing.T) {
 	dir := withConfigDir(t)
 	if err := os.WriteFile(filepath.Join(dir, fileName), []byte(`{"default_provider":"x","providers":{}}`), 0o644); err != nil {

@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -23,8 +24,7 @@ func TestOpenAIProvider_Success(t *testing.T) {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		gotAuth = r.Header.Get("Authorization")
-		buf := make([]byte, r.ContentLength)
-		r.Body.Read(buf)
+		buf, _ := io.ReadAll(r.Body)
 		gotBody = string(buf)
 		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ls -la"}}]}`))
 	}))

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os/exec"
+	"strings"
 
 	"tai/internal/config"
 )
@@ -40,6 +41,11 @@ func (c *CLIProvider) GenerateCommand(prompt string) (string, error) {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
+		// Surface the CLI's own stderr (auth/setup hints, etc.) rather than a
+		// bare "exit status 1".
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return "", fmt.Errorf("%s: %w", msg, err)
+		}
 		return "", err
 	}
 
