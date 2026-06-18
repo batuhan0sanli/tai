@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 
+	"tai/internal/config"
 	"tai/internal/history"
 	"tai/internal/provider"
 	"tai/internal/tui"
@@ -19,6 +20,8 @@ var (
 	skipPermission  bool
 	copyToClipboard bool
 	noTUI           bool
+	providerFlag    string
+	modelFlag       string
 )
 
 // Build metadata. These are overridden at link time by goreleaser via
@@ -37,13 +40,33 @@ func versionString() string {
 }
 
 // Injection points: overridden by tests so the root command can be exercised
-// without the live `claude` CLI or a real TTY.
+// without a live backend, the config file, or a real TTY.
 var (
-	newProvider           = func() provider.AIProvider { return provider.NewClaudeCLIProvider() }
+	loadConfig            = config.Load
+	newProvider           = defaultNewProvider
 	runTUI                = tui.Run
 	saveHistory           = history.SaveEntry
 	stdin       io.Reader = os.Stdin
 )
+
+// defaultNewProvider loads the config, resolves the active provider (honouring
+// the --provider flag, else default_provider) plus any --model override, and
+// builds the concrete provider. A missing config file falls back to the Claude
+// CLI default, so tai keeps working with no config present.
+func defaultNewProvider() (provider.AIProvider, error) {
+	cfg, err := loadConfig()
+	if err != nil {
+		return nil, fmt.Errorf("loading config: %w", err)
+	}
+	_, pc, err := cfg.Resolve(providerFlag)
+	if err != nil {
+		return nil, err
+	}
+	if modelFlag != "" {
+		pc.Model = modelFlag
+	}
+	return provider.New(pc)
+}
 
 var rootCmd = &cobra.Command{
 	Use:   "tai \"[request]\"",
@@ -63,10 +86,14 @@ func runRoot(args []string) int {
 
 	fmt.Println("🤖 tai is thinking...")
 
-	ai := newProvider()
+	ai, err := newProvider()
+	if err != nil {
+		fmt.Printf("❌ Provider error: %v\n", err)
+		return 1
+	}
 	suggestedCmd, err := ai.GenerateCommand(userPrompt)
 	if err != nil {
-		fmt.Printf("❌ Error while invoking Claude: %v\n", err)
+		fmt.Printf("❌ Error generating command: %v\n", err)
 		return 1
 	}
 
@@ -198,4 +225,6 @@ func init() {
 	rootCmd.Flags().BoolVarP(&skipPermission, "yes", "y", false, "Skip the confirmation prompt and run the command directly")
 	rootCmd.Flags().BoolVarP(&copyToClipboard, "copy", "c", false, "Do not run the command, only copy it to the clipboard")
 	rootCmd.Flags().BoolVar(&noTUI, "no-tui", false, "Use the plain y/N prompt instead of the Bubble Tea TUI (for terminals without TUI support)")
+	rootCmd.Flags().StringVar(&providerFlag, "provider", "", "Override the configured default provider for this run (a key under \"providers\" in the config)")
+	rootCmd.Flags().StringVarP(&modelFlag, "model", "m", "", "Override the provider's configured model for this run")
 }

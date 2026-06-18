@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"tai/internal/config"
 	"tai/internal/provider"
 )
 
@@ -38,18 +39,21 @@ func (f *fakeProvider) GenerateCommand(prompt string) (string, error) {
 func withFlagsReset(t *testing.T) {
 	t.Helper()
 	a, b, c := skipPermission, copyToClipboard, noTUI
+	pf, mf := providerFlag, modelFlag
 	t.Cleanup(func() {
 		skipPermission, copyToClipboard, noTUI = a, b, c
+		providerFlag, modelFlag = pf, mf
 	})
 	skipPermission, copyToClipboard, noTUI = false, false, false
+	providerFlag, modelFlag = "", ""
 }
 
 // withInjections snapshots and restores the injection vars used by runRoot.
 func withInjections(t *testing.T) {
 	t.Helper()
-	origProv, origTUI, origSave, origStdin := newProvider, runTUI, saveHistory, stdin
+	origLoad, origProv, origTUI, origSave, origStdin := loadConfig, newProvider, runTUI, saveHistory, stdin
 	t.Cleanup(func() {
-		newProvider, runTUI, saveHistory, stdin = origProv, origTUI, origSave, origStdin
+		loadConfig, newProvider, runTUI, saveHistory, stdin = origLoad, origProv, origTUI, origSave, origStdin
 	})
 	// Default to a no-op recorder so tests don't accidentally write to the real
 	// history file under $HOME. Individual tests can override to inspect calls.
@@ -328,8 +332,8 @@ func TestReadYesNo(t *testing.T) {
 func TestRunRoot_ProviderErrorReturns1(t *testing.T) {
 	withFlagsReset(t)
 	withInjections(t)
-	newProvider = func() provider.AIProvider {
-		return &fakeProvider{err: errors.New("claude offline")}
+	newProvider = func() (provider.AIProvider, error) {
+		return &fakeProvider{err: errors.New("claude offline")}, nil
 	}
 
 	var code int
@@ -354,7 +358,7 @@ func TestRunRoot_CopyPathExitsAfterClipboard(t *testing.T) {
 	copyToClipboard = true
 
 	fp := &fakeProvider{out: "ls -la"}
-	newProvider = func() provider.AIProvider { return fp }
+	newProvider = func() (provider.AIProvider, error) { return fp, nil }
 	runTUI = func(string, string, provider.AIProvider) (string, bool, error) {
 		t.Fatal("TUI must not be invoked in copy path")
 		return "", false, nil
@@ -406,7 +410,7 @@ func TestRunRoot_CopyFailureReturns1(t *testing.T) {
 	withInjections(t)
 	copyToClipboard = true
 
-	newProvider = func() provider.AIProvider { return &fakeProvider{out: "ls"} }
+	newProvider = func() (provider.AIProvider, error) { return &fakeProvider{out: "ls"}, nil }
 
 	// Empty PATH guarantees the clipboard tool lookup fails.
 	origPath := os.Getenv("PATH")
@@ -435,7 +439,7 @@ func TestRunRoot_YesFlagExecutesImmediately(t *testing.T) {
 	skipPermission = true
 
 	fp := &fakeProvider{out: "echo hi-from-yes"}
-	newProvider = func() provider.AIProvider { return fp }
+	newProvider = func() (provider.AIProvider, error) { return fp, nil }
 	runTUI = func(string, string, provider.AIProvider) (string, bool, error) {
 		t.Fatal("TUI must not be invoked with --yes")
 		return "", false, nil
@@ -469,7 +473,7 @@ func TestRunRoot_NoTUIPath_AcceptsYes(t *testing.T) {
 	noTUI = true
 	stdin = strings.NewReader("y\n")
 
-	newProvider = func() provider.AIProvider { return &fakeProvider{out: "echo no-tui-output"} }
+	newProvider = func() (provider.AIProvider, error) { return &fakeProvider{out: "echo no-tui-output"}, nil }
 	runTUI = func(string, string, provider.AIProvider) (string, bool, error) {
 		t.Fatal("TUI must not run when --no-tui is set")
 		return "", false, nil
@@ -498,8 +502,8 @@ func TestRunRoot_NoTUIPath_RejectsWithN(t *testing.T) {
 	// detect execution unambiguously (the suggested command text itself is
 	// always echoed back in the header).
 	sentinel := filepath.Join(t.TempDir(), "ran.flag")
-	newProvider = func() provider.AIProvider {
-		return &fakeProvider{out: "touch " + sentinel}
+	newProvider = func() (provider.AIProvider, error) {
+		return &fakeProvider{out: "touch " + sentinel}, nil
 	}
 
 	var code int
@@ -529,7 +533,7 @@ func TestRunRoot_DefaultPathHandsOffToTUI_Accept(t *testing.T) {
 	withInjections(t)
 
 	tuiCalls := 0
-	newProvider = func() provider.AIProvider { return &fakeProvider{out: "echo from-tui"} }
+	newProvider = func() (provider.AIProvider, error) { return &fakeProvider{out: "echo from-tui"}, nil }
 	runTUI = func(orig, suggested string, _ provider.AIProvider) (string, bool, error) {
 		tuiCalls++
 		if orig != "tui prompt" {
@@ -560,7 +564,7 @@ func TestRunRoot_DefaultPathHandsOffToTUI_Accept(t *testing.T) {
 func TestRunRoot_DefaultPath_Cancel(t *testing.T) {
 	withFlagsReset(t)
 	withInjections(t)
-	newProvider = func() provider.AIProvider { return &fakeProvider{out: "ls"} }
+	newProvider = func() (provider.AIProvider, error) { return &fakeProvider{out: "ls"}, nil }
 	runTUI = func(string, string, provider.AIProvider) (string, bool, error) {
 		return "ls", false, nil
 	}
@@ -579,7 +583,7 @@ func TestRunRoot_DefaultPath_Cancel(t *testing.T) {
 func TestRunRoot_DefaultPath_TUIError(t *testing.T) {
 	withFlagsReset(t)
 	withInjections(t)
-	newProvider = func() provider.AIProvider { return &fakeProvider{out: "ls"} }
+	newProvider = func() (provider.AIProvider, error) { return &fakeProvider{out: "ls"}, nil }
 	runTUI = func(string, string, provider.AIProvider) (string, bool, error) {
 		return "", false, errors.New("terminal closed")
 	}
@@ -617,7 +621,7 @@ func TestRunRoot_YesFlagRecordsHistory(t *testing.T) {
 
 	rec := &historyRecorder{}
 	saveHistory = rec.save
-	newProvider = func() provider.AIProvider { return &fakeProvider{out: "echo ok"} }
+	newProvider = func() (provider.AIProvider, error) { return &fakeProvider{out: "echo ok"}, nil }
 
 	_ = captureStdout(t, func() { runRoot([]string{"do", "thing"}) })
 
@@ -642,7 +646,7 @@ func TestRunRoot_CopyPathRecordsHistory(t *testing.T) {
 
 	rec := &historyRecorder{}
 	saveHistory = rec.save
-	newProvider = func() provider.AIProvider { return &fakeProvider{out: "ls"} }
+	newProvider = func() (provider.AIProvider, error) { return &fakeProvider{out: "ls"}, nil }
 
 	dir := t.TempDir()
 	switch runtime.GOOS {
@@ -676,7 +680,7 @@ func TestRunRoot_NoTUIAcceptRecordsHistory(t *testing.T) {
 
 	rec := &historyRecorder{}
 	saveHistory = rec.save
-	newProvider = func() provider.AIProvider { return &fakeProvider{out: "echo accepted"} }
+	newProvider = func() (provider.AIProvider, error) { return &fakeProvider{out: "echo accepted"}, nil }
 
 	_ = captureStdout(t, func() { runRoot([]string{"x"}) })
 
@@ -693,7 +697,7 @@ func TestRunRoot_NoTUIRejectSkipsHistory(t *testing.T) {
 
 	rec := &historyRecorder{}
 	saveHistory = rec.save
-	newProvider = func() provider.AIProvider { return &fakeProvider{out: "ls"} }
+	newProvider = func() (provider.AIProvider, error) { return &fakeProvider{out: "ls"}, nil }
 
 	_ = captureStdout(t, func() { runRoot([]string{"x"}) })
 
@@ -708,7 +712,7 @@ func TestRunRoot_TUICancelSkipsHistory(t *testing.T) {
 
 	rec := &historyRecorder{}
 	saveHistory = rec.save
-	newProvider = func() provider.AIProvider { return &fakeProvider{out: "ls"} }
+	newProvider = func() (provider.AIProvider, error) { return &fakeProvider{out: "ls"}, nil }
 	runTUI = func(string, string, provider.AIProvider) (string, bool, error) {
 		return "ls", false, nil
 	}
@@ -729,7 +733,7 @@ func TestRunRoot_TUIAcceptRecordsRevisedCommand(t *testing.T) {
 
 	rec := &historyRecorder{}
 	saveHistory = rec.save
-	newProvider = func() provider.AIProvider { return &fakeProvider{out: "echo original"} }
+	newProvider = func() (provider.AIProvider, error) { return &fakeProvider{out: "echo original"}, nil }
 	runTUI = func(string, string, provider.AIProvider) (string, bool, error) {
 		return "echo revised", true, nil
 	}
@@ -811,8 +815,59 @@ func TestRecordHistory_SilentOnSuccess(t *testing.T) {
 	}
 }
 
+func TestDefaultNewProvider_LoadError(t *testing.T) {
+	withFlagsReset(t)
+	withInjections(t)
+	loadConfig = func() (config.Config, error) { return config.Config{}, errors.New("bad config") }
+	if _, err := defaultNewProvider(); err == nil {
+		t.Fatal("expected error when loadConfig fails")
+	}
+}
+
+func TestDefaultNewProvider_ResolveError(t *testing.T) {
+	withFlagsReset(t)
+	withInjections(t)
+	loadConfig = func() (config.Config, error) { return config.Default(), nil }
+	providerFlag = "nonexistent"
+	if _, err := defaultNewProvider(); err == nil {
+		t.Fatal("expected resolve error for unknown provider")
+	}
+}
+
+func TestDefaultNewProvider_Success(t *testing.T) {
+	withFlagsReset(t)
+	withInjections(t)
+	loadConfig = func() (config.Config, error) { return config.Default(), nil }
+	p, err := defaultNewProvider()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
+func TestDefaultNewProvider_ModelOverride(t *testing.T) {
+	withFlagsReset(t)
+	withInjections(t)
+	loadConfig = func() (config.Config, error) {
+		return config.Config{
+			DefaultProvider: "openai",
+			Providers:       map[string]config.ProviderConfig{"openai": {Type: config.TypeOpenAI, Model: "gpt-4o"}},
+		}, nil
+	}
+	modelFlag = "gpt-4o-mini"
+	p, err := defaultNewProvider()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
 func TestRootCmd_FlagsRegistered(t *testing.T) {
-	for _, name := range []string{"yes", "copy", "no-tui", "version"} {
+	for _, name := range []string{"yes", "copy", "no-tui", "version", "provider", "model"} {
 		f := rootCmd.Flags().Lookup(name)
 		if f == nil {
 			t.Errorf("flag %q is not registered", name)

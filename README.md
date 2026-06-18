@@ -6,8 +6,10 @@
 
 **Terminal AI — turn natural-language requests into shell commands, right from your terminal.**
 
-`tai` ("Terminal AI") is a tiny CLI that asks Claude to translate a plain-English request into the exact shell command
+`tai` ("Terminal AI") is a tiny CLI that asks an AI model to translate a plain-English request into the exact shell command
 you would have typed, shows it to you, and then runs it, copies it, or lets you refine it through an interactive TUI.
+
+It works with **multiple providers** — Claude Code (default), OpenAI Codex, Gemini CLI, the OpenAI / Gemini / Anthropic APIs, and any OpenAI-compatible local model (Ollama, etc.) — selectable from a config file or per-run with `--provider` / `--model`.
 
 ```bash
 $ tai "show me the 10 largest files under this directory"
@@ -99,13 +101,15 @@ sudo mv tai /usr/local/bin/   # optional
 
 ### Runtime dependency
 
-`tai` shells out to the [`claude` CLI](https://docs.claude.com/en/docs/claude-code/overview) to generate commands, so `claude` must be on your `PATH` and authenticated.
+Out of the box `tai` shells out to the [`claude` CLI](https://docs.claude.com/en/docs/claude-code/overview), so `claude` must be on your `PATH` and authenticated. If you configure a different provider, its requirement applies instead — an API key (OpenAI / Gemini / Anthropic), or the relevant CLI on `PATH` (`codex`, `gemini`). See [Providers & configuration](#providers--configuration).
 
 ## Usage
 
 ```
-tai "[request]" [-y|--yes] [-c|--copy] [--no-tui]
+tai "[request]" [-y|--yes] [-c|--copy] [--no-tui] [--provider NAME] [-m|--model NAME]
 tai history     [-y|--yes]
+tai config init [--force]
+tai config path
 tai --version
 ```
 
@@ -170,6 +174,8 @@ tai --version
 | `-y`, `--yes` | Run the suggested command immediately, skipping the confirmation. |
 | `-c`, `--copy` | Copy the suggested command to the clipboard instead of running it. |
 | `--no-tui` | Use a plain `y/N` prompt instead of the Bubble Tea TUI. |
+| `--provider NAME` | Override the configured `default_provider` for this run. |
+| `-m`, `--model NAME` | Override the selected provider's model for this run. |
 | `-v`, `--version` | Print version, commit, and build date and exit. |
 
 #### `tai history`
@@ -178,16 +184,58 @@ tai --version
 | :--- | :--- |
 | `-y`, `--yes` | Execute the selected entry instead of copying it to the clipboard. |
 
+## Providers & configuration
+
+`tai` reads `~/.config/tai/config.json` to decide which AI backend to use. With no config present it falls back to the `claude` CLI, so it works out of the box. Run `tai config init` to drop a starter config with every provider stubbed, then fill in keys/models and point `default_provider` at the one you want:
+
+```bash
+tai config init     # writes ~/.config/tai/config.json (won't overwrite without --force)
+tai config path     # prints the config file path
+```
+
+```jsonc
+{
+  "default_provider": "claude-code",
+  "providers": {
+    "claude-code": { "type": "cli", "command": "claude", "args": ["-p"] },
+    "codex":       { "type": "cli", "command": "codex", "args": ["exec"] },
+    "gemini-cli":  { "type": "cli", "command": "gemini", "args": ["-p"] },
+    "openai":      { "type": "openai", "model": "gpt-4o-mini", "base_url": "https://api.openai.com/v1", "api_key_env": "OPENAI_API_KEY" },
+    "gemini":      { "type": "gemini", "model": "gemini-2.0-flash", "api_key_env": "GEMINI_API_KEY" },
+    "anthropic":   { "type": "anthropic", "model": "claude-opus-4-8", "api_key_env": "ANTHROPIC_API_KEY" },
+    "ollama":      { "type": "openai", "model": "llama3.2", "base_url": "http://localhost:11434/v1" }
+  }
+}
+```
+
+Provider `type` values:
+
+| `type` | Used for | Needs |
+| :--- | :--- | :--- |
+| `cli` | Claude Code, OpenAI Codex, Gemini CLI | The `command` on your `PATH` |
+| `openai` | OpenAI API **and** any OpenAI-compatible server (Ollama, LM Studio, …) via `base_url` | `api_key` (cloud) and/or `base_url` |
+| `gemini` | Google Gemini API | `api_key` |
+| `anthropic` | Anthropic Messages API | `api_key` |
+
+**API keys** can be inlined as `api_key`, pointed at a custom env var via `api_key_env`, or — if neither is set — read from the conventional env var for the type (`OPENAI_API_KEY` / `GEMINI_API_KEY` / `ANTHROPIC_API_KEY`). Keeping keys in the environment avoids storing secrets in the config file.
+
+Switch provider/model per run without editing the config:
+
+```bash
+tai --provider openai "list open ports"
+tai --provider ollama -m qwen2.5-coder "rename all .jpeg files to .jpg"
+```
+
 ## How it works
 
-1. The default provider (`internal/provider/claude.go`) shells out to `claude -p "<system prompt> <user request>"`.
-2. The system prompt constrains the model to emit **only** the raw command — no markdown, no prose.
+1. `internal/config` loads `~/.config/tai/config.json` and resolves the active provider (`--provider`/default) and model (`--model`).
+2. `provider.New` builds the matching backend: a CLI subprocess, an OpenAI-compatible HTTP call, a Gemini HTTP call, or the Anthropic API via the official SDK. A shared system prompt constrains the model to emit **only** the raw command — no markdown, no prose.
 3. `SanitizeCommand` (`internal/provider/sanitize.go`) strips any leftover code fences and **rejects multi-line responses**, so a chatty model reply can't smuggle in extra commands when running under `-y`.
 4. The Bubble Tea TUI (`internal/tui/`) handles the confirmation / revision loop.
 5. On accept, the command is executed via `bash -c`; on copy, it's piped to the platform clipboard tool.
 6. Executed and copied commands are appended to `~/.config/tai/history.json` for `tai history`.
 
-The `provider.AIProvider` interface is the extension point — implementing it would let `tai` target the direct Anthropic API, OpenAI, or a local model.
+The `provider.AIProvider` interface is the extension point — implementing it and adding a `type` to `provider.New` is all a new backend needs.
 
 ## Development
 
@@ -211,6 +259,7 @@ Coverage targets (see [`CLAUDE.md`](CLAUDE.md) for the full breakdown):
 | Package | Target |
 | :--- | :--- |
 | `internal/provider` | 100% |
+| `internal/config` | ≥ 87% |
 | `internal/history` | ≥ 88% |
 | `internal/tui` | ≥ 87% |
 | `cmd` | ≥ 90% |
@@ -248,9 +297,10 @@ git push origin main --follow-tags
 ```
 .
 ├── main.go                       # entry point — calls cmd.Execute()
-├── cmd/                          # cobra commands (root + history) and dispatch
+├── cmd/                          # cobra commands (root + history + config) and dispatch
 ├── internal/
-│   ├── provider/                 # AIProvider interface + ClaudeCLIProvider + SanitizeCommand
+│   ├── provider/                 # AIProvider interface, factory + cli/openai/gemini/anthropic impls, SanitizeCommand
+│   ├── config/                   # multi-provider config (JSON on disk)
 │   ├── tui/                      # Bubble Tea confirmation TUI and history browser
 │   └── history/                  # JSON-on-disk command history
 ├── .goreleaser.yaml              # build / packaging / distribution config

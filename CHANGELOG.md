@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Multi-provider support, selectable via `~/.config/tai/config.json`: Claude Code (default), OpenAI Codex, and Gemini CLI (`type: cli`); the OpenAI API and any OpenAI-compatible local server such as Ollama (`type: openai`); the Google Gemini API (`type: gemini`); and the Anthropic Messages API via the official SDK (`type: anthropic`).
+- `tai config init` / `tai config path` subcommands to scaffold and locate the config file.
+- `--provider NAME` and `-m` / `--model NAME` flags to override the configured default provider/model for a single run.
+- API keys resolve from an inline `api_key`, a configurable `api_key_env`, or the conventional `OPENAI_API_KEY` / `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` env vars.
+
+### Changed
+- A missing config file falls back to the `claude` CLI, so existing behaviour is unchanged with no config present.
+
 ## [0.1.0] - 2026-06-14
 
 First public release.
