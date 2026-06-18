@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `tai config edit` — an interactive TUI to choose the default provider and edit each provider's model, API key, base URL, and command without hand-editing JSON.
+
 ## [0.2.0] - 2026-06-18
 
 ### Added
