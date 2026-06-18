@@ -2,10 +2,13 @@ package provider
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -93,4 +96,47 @@ func (p *GeminiProvider) GenerateCommand(prompt string) (string, error) {
 	}
 
 	return SanitizeCommand(parsed.Candidates[0].Content.Parts[0].Text)
+}
+
+// ListModels returns the Gemini model IDs that support generateContent, with
+// the "models/" prefix stripped (e.g. "gemini-2.0-flash").
+func (p *GeminiProvider) ListModels(ctx context.Context) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	if p.apiKey != "" {
+		req.Header.Set("x-goog-api-key", p.apiKey)
+	}
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("gemini: %s: %s", resp.Status, strings.TrimSpace(string(msg)))
+	}
+
+	var parsed struct {
+		Models []struct {
+			Name                       string   `json:"name"`
+			SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, err
+	}
+
+	models := make([]string, 0, len(parsed.Models))
+	for _, mdl := range parsed.Models {
+		if !slices.Contains(mdl.SupportedGenerationMethods, "generateContent") {
+			continue
+		}
+		models = append(models, strings.TrimPrefix(mdl.Name, "models/"))
+	}
+	sort.Strings(models)
+	return models, nil
 }

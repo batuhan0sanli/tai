@@ -15,8 +15,10 @@ import (
 func withConfigInjections(t *testing.T) {
 	t.Helper()
 	origPath, origSave, origForce := configFilePath, configSave, configForce
+	origLoad, origTUI := configLoad, runConfigTUI
 	t.Cleanup(func() {
 		configFilePath, configSave, configForce = origPath, origSave, origForce
+		configLoad, runConfigTUI = origLoad, origTUI
 	})
 	configForce = false
 }
@@ -177,16 +179,160 @@ func TestRunConfigInit_SaveError(t *testing.T) {
 	}
 }
 
+func TestRunConfigEdit_NoFileSeedsTemplate(t *testing.T) {
+	withConfigInjections(t)
+	configFilePath = func() (string, error) { return filepath.Join(t.TempDir(), "config.json"), nil }
+
+	var got config.Config
+	runConfigTUI = func(c config.Config) (config.Config, bool, error) {
+		got = c
+		return c, false, nil // user quits without saving
+	}
+	configSave = func(config.Config) error {
+		t.Fatal("configSave must not be called when the user doesn't save")
+		return nil
+	}
+
+	var code int
+	out := captureStdout(t, func() { code = runConfigEdit() })
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	if len(got.Providers) < 2 {
+		t.Errorf("expected the editor to be seeded from the template (many providers), got %d", len(got.Providers))
+	}
+	if !strings.Contains(out, "No changes saved") {
+		t.Errorf("output should report no save, got %q", out)
+	}
+}
+
+func TestRunConfigEdit_ExistingFileLoads(t *testing.T) {
+	withConfigInjections(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	configFilePath = func() (string, error) { return path, nil }
+
+	loaded := config.Config{DefaultProvider: "from-load", Providers: map[string]config.ProviderConfig{"x": {Type: config.TypeCLI}}}
+	configLoad = func() (config.Config, error) { return loaded, nil }
+
+	var got config.Config
+	runConfigTUI = func(c config.Config) (config.Config, bool, error) { got = c; return c, false, nil }
+
+	var code int
+	_ = captureStdout(t, func() { code = runConfigEdit() })
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	if got.DefaultProvider != "from-load" {
+		t.Errorf("editor should receive the loaded config, got default %q", got.DefaultProvider)
+	}
+}
+
+func TestRunConfigEdit_LoadError(t *testing.T) {
+	withConfigInjections(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	configFilePath = func() (string, error) { return path, nil }
+	configLoad = func() (config.Config, error) { return config.Config{}, errors.New("corrupt") }
+
+	var code int
+	out := captureStdout(t, func() { code = runConfigEdit() })
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "failed to load config") {
+		t.Errorf("output should mention load failure, got %q", out)
+	}
+}
+
+func TestRunConfigEdit_TUIError(t *testing.T) {
+	withConfigInjections(t)
+	configFilePath = func() (string, error) { return filepath.Join(t.TempDir(), "config.json"), nil }
+	runConfigTUI = func(c config.Config) (config.Config, bool, error) {
+		return c, false, errors.New("tty gone")
+	}
+
+	var code int
+	out := captureStdout(t, func() { code = runConfigEdit() })
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "config editor error") {
+		t.Errorf("output should mention editor error, got %q", out)
+	}
+}
+
+func TestRunConfigEdit_SavesOnConfirm(t *testing.T) {
+	withConfigInjections(t)
+	path := filepath.Join(t.TempDir(), "config.json")
+	configFilePath = func() (string, error) { return path, nil }
+	runConfigTUI = func(c config.Config) (config.Config, bool, error) { return c, true, nil }
+
+	var saved bool
+	configSave = func(config.Config) error { saved = true; return nil }
+
+	var code int
+	out := captureStdout(t, func() { code = runConfigEdit() })
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	if !saved {
+		t.Error("configSave should be called when the user saves")
+	}
+	if !strings.Contains(out, "saved") {
+		t.Errorf("output should confirm save, got %q", out)
+	}
+}
+
+func TestRunConfigEdit_SaveError(t *testing.T) {
+	withConfigInjections(t)
+	configFilePath = func() (string, error) { return filepath.Join(t.TempDir(), "config.json"), nil }
+	runConfigTUI = func(c config.Config) (config.Config, bool, error) { return c, true, nil }
+	configSave = func(config.Config) error { return errors.New("disk full") }
+
+	var code int
+	out := captureStdout(t, func() { code = runConfigEdit() })
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "failed to write") {
+		t.Errorf("output should mention write failure, got %q", out)
+	}
+}
+
+func TestRunConfigEdit_FilePathError(t *testing.T) {
+	withConfigInjections(t)
+	configFilePath = func() (string, error) { return "", errors.New("no home") }
+
+	var code int
+	out := captureStdout(t, func() { code = runConfigEdit() })
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(out, "no home") {
+		t.Errorf("output should surface the error, got %q", out)
+	}
+}
+
 func TestConfigCmd_Registered(t *testing.T) {
 	var found bool
 	for _, c := range rootCmd.Commands() {
 		if c.Name() == "config" {
 			found = true
+			if c.Run == nil {
+				t.Error("bare `tai config` should open the editor (Run not wired)")
+			}
 			sub := map[string]bool{}
 			for _, s := range c.Commands() {
 				sub[s.Name()] = true
 			}
-			if !sub["init"] || !sub["path"] {
+			if !sub["init"] || !sub["path"] || !sub["edit"] {
 				t.Errorf("config subcommands missing: %v", sub)
 			}
 		}
