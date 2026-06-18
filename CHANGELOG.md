@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-18
+
 ### Added
 - Multi-provider support, selectable via `~/.config/tai/config.json`: Claude Code (default), OpenAI Codex, and Gemini CLI (`type: cli`); the OpenAI API and any OpenAI-compatible local server such as Ollama (`type: openai`); the Google Gemini API (`type: gemini`); and the Anthropic Messages API via the official SDK (`type: anthropic`).
 - `tai config init` / `tai config path` subcommands to scaffold and locate the config file.
@@ -15,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - A missing config file falls back to the `claude` CLI, so existing behaviour is unchanged with no config present.
+
+### Fixed
+- CLI-provider failures now surface the backend command's stderr (auth/setup hints) instead of a bare `exit status 1`.
+- Anthropic API requests are bounded by a 60s timeout so a hung request can't block `tai` indefinitely.
+- A whitespace-only config file is treated as empty (falls back to the default) instead of failing to parse.
 
 ## [0.1.0] - 2026-06-14
 
@@ -33,5 +40,6 @@ First public release.
 - GitHub Actions workflow (`.github/workflows/release.yml`) that triggers GoReleaser on tag push.
 - `/release` Claude skill at `.claude/skills/release/SKILL.md` that runs the test suite, updates `CHANGELOG.md`, tags, and pushes a new version.
 
-[Unreleased]: https://github.com/batuhan0sanli/tai/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/batuhan0sanli/tai/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/batuhan0sanli/tai/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/batuhan0sanli/tai/releases/tag/v0.1.0
